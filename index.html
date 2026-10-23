@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OCTRAM AI-TV | Low-Bitrate Receiver</title>
+<style>
+:root{--bg:#050608;--panel:#0f1115;--border:#252b36;--accent:#00ffcc;--pink:#ff00cc;--text:#d7dde6;--muted:#8b96a8}
+*{box-sizing:border-box}
+body{margin:0;padding:14px;background:var(--bg);color:var(--text);font:14px system-ui,"Noto Sans JP",sans-serif}
+main{max-width:900px;margin:auto}
+h1{font:700 17px ui-monospace,monospace;color:var(--accent);text-align:center;letter-spacing:1px}
+.note{font-size:12px;line-height:1.65;color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:13px;margin:12px 0}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+label{display:block;font-size:12px;margin:8px 0 4px;color:#b9c4d4}
+input[type=range]{width:100%;accent-color:var(--accent)}
+input[type=file],button,select{max-width:100%;padding:9px;background:#171b22;color:var(--text);border:1px solid #394150;border-radius:6px}
+button{cursor:pointer}
+button:active{transform:scale(.99)}
+.metrics{display:flex;flex-wrap:wrap;gap:8px}
+.metric{background:#080b10;border:1px solid var(--border);padding:7px 9px;border-radius:6px;font:12px ui-monospace,monospace}
+.metric b{color:var(--accent)}
+.viewgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.view{min-width:0}
+.view h2{font:600 12px ui-monospace,monospace;color:var(--accent);margin:0 0 7px}
+canvas{display:block;width:100%;height:auto;max-height:70vh;object-fit:contain;background:#000;border:1px solid #29313b;image-rendering:auto}
+#processed{image-rendering:auto;box-shadow:0 0 18px #00ffcc18}
+video{display:block;width:100%;max-height:55vh;background:#000}
+.small{font-size:11px;color:var(--muted);margin-top:6px}
+.value{float:right;color:var(--accent);font-variant-numeric:tabular-nums}
+.status{color:var(--accent);font-size:12px}
+.warning{color:#ffd166}
+@media(max-width:520px){body{padding:8px}.panel{padding:10px}h1{font-size:14px}}
+</style>
+</head>
+<body>
+<main>
+<h1>OCTRAM AI-TV | LOW-BITRATE RECEIVER</h1>
+<p class="note">動画ファイルを読み込み、低解像度への縮小・軽量な画質補正・2倍アップスケールをリアルタイムで試す実験ページです。</p>
+
+<section class="panel">
+  <label for="file">① 入力動画（MP4 / WebM など）</label>
+  <input id="file" type="file" accept="video/*">
+  <div class="note">端末内の動画を選択してください。動画はこのページ内で処理し、サーバーには送信しません。</div>
+  <div style="margin-top:10px"><video id="source" controls playsinline></video></div>
+  <div class="metrics" style="margin-top:9px">
+    <div class="metric">入力: <b id="inputSize">未選択</b></div>
+    <div class="metric">推定ビットレート: <b id="bitrate">—</b></div>
+    <div class="metric">再生: <b id="playState">停止中</b></div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2 style="color:var(--accent);font-size:13px">② 受信・補正設定</h2>
+  <div class="controls">
+    <div>
+      <label for="inW">処理する低解像度の幅 <span class="value" id="inWVal">128 px</span></label>
+      <input id="inW" type="range" min="64" max="256" step="16" value="128">
+      <label for="inH">処理する低解像度の高さ <span class="value" id="inHVal">216 px</span></label>
+      <input id="inH" type="range" min="96" max="432" step="12" value="216">
+      <label for="scale">拡大倍率 <span class="value" id="scaleVal">2×</span></label>
+      <select id="scale"><option value="2" selected>2倍</option><option value="3">3倍</option><option value="4">4倍</option></select>
+    </div>
+    <div>
+      <label for="sharp">輪郭強調 <span class="value" id="sharpVal">0.6</span></label>
+      <input id="sharp" type="range" min="0" max="1.5" step="0.1" value="0.6">
+      <label for="denoise">ノイズ低減 <span class="value" id="denoiseVal">0.3</span></label>
+      <input id="denoise" type="range" min="0" max="1" step="0.1" value="0.3">
+      <label for="contrast">コントラスト <span class="value" id="contrastVal">1.15</span></label>
+      <input id="contrast" type="range" min="0.5" max="1.8" step="0.05" value="1.15">
+      <label for="black">黒レベル <span class="value" id="blackVal">0</span></label>
+      <input id="black" type="range" min="-30" max="30" step="2" value="0">
+    </div>
+  </div>
+  <div class="note warning">注意：ここでのノイズ低減・輪郭強調はCanvasによる軽量な画像処理です。学習済みAIによる超解像ではありません。</div>
+</section>
+
+<section class="panel">
+  <h2 style="color:var(--accent);font-size:13px">③ 比較モニター</h2>
+  <div class="viewgrid">
+    <div class="view">
+      <h2>LOW-RES INPUT (補正前)</h2>
+      <canvas id="low" width="128" height="216"></canvas>
+      <div class="small" id="lowLabel">128 × 216 px</div>
+    </div>
+    <div class="view">
+      <h2>UPSCALED + ENHANCED (補正後)</h2>
+      <canvas id="processed" width="256" height="432"></canvas>
+      <div class="small" id="outLabel">256 × 432 px</div>
+    </div>
+  </div>
+  <div class="metrics" style="margin-top:10px">
+    <div class="metric">処理方式: <b>Canvas / CPU</b></div>
+    <div class="metric">描画状態: <b id="renderStatus">待機中</b></div>
+    <div class="metric">実測FPS: <b id="fps">—</b></div>
+  </div>
+  <p class="note">32kbpsそのものに動画を再圧縮する機能は含みません。ファイルの実際のビットレートが32kbpsかどうかは、上の推定値または別の解析ツールで確認してください。</p>
+  <button id="reset">補正値を初期設定に戻す</button>
+</section>
+
+<canvas id="work" width="128" height="216" hidden></canvas>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const video = $('source');
+  const low = $('low'), lowCtx = low.getContext('2d', {willReadFrequently:true});
+  const out = $('processed'), outCtx = out.getContext('2d', {willReadFrequently:true});
+  const work = $('work'), workCtx = work.getContext('2d', {willReadFrequently:true});
+  let objectUrl = null, raf = 0, lastFpsTime = performance.now(), frames = 0;
+  const controls = ['inW','inH','scale','sharp','denoise','contrast','black'];
+  function updateLabels(){
+    $('inWVal').textContent = $('inW').value + ' px';
+    $('inHVal').textContent = $('inH').value + ' px';
+    $('scaleVal').textContent = $('scale').value + '×';
+    $('sharpVal').textContent = Number($('sharp').value).toFixed(1);
+    $('denoiseVal').textContent = Number($('denoise').value).toFixed(1);
+    $('contrastVal').textContent = Number($('contrast').value).toFixed(2);
+    $('blackVal').textContent = $('black').value;
+    const w = Number($('inW').value), h = Number($('inH').value), s = Number($('scale').value);
+    low.width = work.width = w; low.height = work.height = h;
+    out.width = w*s; out.height = h*s;
+    $('lowLabel').textContent = `${w} × ${h} px`;
+    $('outLabel').textContent = `${w*s} × ${h*s} px`;
+  }
+  controls.forEach(id => $(id).addEventListener('input', () => { updateLabels(); }));
+  $('file').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(f);
+    video.src = objectUrl;
+    video.load();
+    $('inputSize').textContent = f.name.length > 22 ? f.name.slice(0,19)+'…' : f.name;
+    $('bitrate').textContent = '計算中…';
+    $('renderStatus').textContent = '動画を読み込み中';
+  });
+  video.addEventListener('loadedmetadata', () => {
+    const f = $('file').files && $('file').files[0];
+    if (f && video.duration > 0) {
+      const kbps = f.size * 8 / video.duration / 1000;
+      $('bitrate').textContent = kbps.toFixed(1) + ' kbps（ファイル全体の概算）';
+    }
+    $('renderStatus').textContent = '再生準備完了';
+    drawFrame();
+  });
+  video.addEventListener('play', () => { $('playState').textContent = '再生中'; cancelAnimationFrame(raf); drawFrame(); });
+  video.addEventListener('pause', () => { $('playState').textContent = '一時停止'; });
+  video.addEventListener('ended', () => { $('playState').textContent = '終了'; });
+  video.addEventListener('error', () => { $('renderStatus').textContent = '動画を開けません。別形式のMP4/WebMをお試しください'; });
+
+  function clamp(v){ return Math.max(0, Math.min(255, v)); }
+  function processFrame(){
+    const w = work.width, h = work.height;
+    const img = workCtx.getImageData(0,0,w,h), src = img.data;
+    const den = Number($('denoise').value), sharp = Number($('sharp').value);
+    const contrast = Number($('contrast').value), black = Number($('black').value);
+    // 軽量な3x3近傍平均をノイズ低減として混合
+    let base = new Uint8ClampedArray(src);
+    if (den > 0) {
+      for (let y=1; y<h-1; y++) for (let x=1; x<w-1; x++) {
+        const i=(y*w+x)*4;
+        for(let c=0;c<3;c++){
+          const avg=(base[i-4+c]+base[i+4+c]+base[i-w*4+c]+base[i+w*4+c]+base[i-w*4-4+c]+base[i-w*4+4+c]+base[i+w*4-4+c]+base[i+w*4+4+c])/8;
+          src[i+c]=base[i+c]*(1-den*0.55)+avg*(den*0.55);
+        }
+      }
+    }
+    // 輪郭強調：中心画素と上下左右の平均との差を加える
+    base = new Uint8ClampedArray(src);
+    if (sharp > 0) {
+      for (let y=1; y<h-1; y++) for (let x=1; x<w-1; x++) {
+        const i=(y*w+x)*4;
+        for(let c=0;c<3;c++){
+          const neighbors=(base[i-4+c]+base[i+4+c]+base[i-w*4+c]+base[i+w*4+c])/4;
+          src[i+c]=clamp(base[i+c]+(base[i+c]-neighbors)*sharp);
+        }
+      }
+    }
+    for(let i=0;i<src.length;i+=4){
+      for(let c=0;c<3;c++) src[i+c]=clamp((src[i+c]-128)*contrast+128+black);
+    }
+    outCtx.putImageData(img,0,0);
+    // 同じ画素を出力サイズに拡大。ブラウザの補間を利用
+    outCtx.imageSmoothingEnabled = true;
+    outCtx.imageSmoothingQuality = 'high';
+    const tmp = document.createElement('canvas');
+    tmp.width=w; tmp.height=h;
+    tmp.getContext('2d').putImageData(img,0,0);
+    outCtx.clearRect(0,0,out.width,out.height);
+    outCtx.drawImage(tmp,0,0,out.width,out.height);
+  }
+  function drawFrame(){
+    cancelAnimationFrame(raf);
+    if(video.readyState >= 2 && video.videoWidth > 0){
+      const w=low.width,h=low.height;
+      // ソース動画を指定した低解像度へ縮小
+      lowCtx.fillStyle='#000'; lowCtx.fillRect(0,0,w,h);
+      const sw=video.videoWidth, sh=video.videoHeight;
+      const scale=Math.min(w/sw,h/sh), dw=sw*scale, dh=sh*scale;
+      lowCtx.drawImage(video,(w-dw)/2,(h-dh)/2,dw,dh);
+      workCtx.drawImage(low,0,0,work.width,work.height);
+      processFrame();
+      $('renderStatus').textContent = '処理中';
+      frames++;
+      const now=performance.now();
+      if(now-lastFpsTime>=1000){
+        $('fps').textContent = Math.round(frames*1000/(now-lastFpsTime));
+        frames=0; lastFpsTime=now;
+      }
+    }
+    raf=requestAnimationFrame(drawFrame);
+  }
+  $('reset').addEventListener('click',()=>{
+    $('inW').value=128; $('inH').value=216; $('scale').value='2';
+    $('sharp').value=0.6; $('denoise').value=0.3; $('contrast').value=1.15; $('black').value=0;
+    updateLabels();
+  });
+  updateLabels();
+  window.addEventListener('pagehide',()=>{cancelAnimationFrame(raf); if(objectUrl) URL.revokeObjectURL(objectUrl);});
+})();
+</script>
+</body>
+</html>
